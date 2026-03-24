@@ -246,13 +246,13 @@ summary_df = create_summary(df_data, af_master)
 st.subheader("✅ サマリ")
 st.dataframe(summary_df, use_container_width=True)
 
-st.subheader("📋 明細")
-st.dataframe(df_data, use_container_width=True)
+df_data["日付"] = df_data["日付"].map(lambda x: f"{x.year}/{x.month}/{x.day}")
 
 excel_bytes = to_excel(summary_df, df_data)
 
+
 st.download_button(
-    label="📥 集計結果をダウンロード（Excel）",
+    label="📤 集計結果をダウンロード（Excel）",
     data=excel_bytes,
     file_name="集計結果.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
