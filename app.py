@@ -15,9 +15,9 @@ import os
 st.set_page_config(page_title="集計アプリ（申込・発行対応）", layout="wide")
 
 BASE = r"C:\work\shukei_app"
-AF_MASTER_PATH = os.path.join(BASE, "AFマスター.xlsx")
-TARGET申込_PATH = os.path.join(BASE, "目標申込件数マスター.xlsx")
-TARGET発行_PATH = os.path.join(BASE, "目標発行件数マスター.xlsx")
+AF_MASTER_PATH = "AFマスター.xlsx"
+TARGET申込_PATH = "目標申込件数マスター.xlsx"
+TARGET発行_PATH = "目標発行件数マスター.xlsx"
 
 # ============================================
 # normalize 関数（揺れ吸収）
