@@ -212,13 +212,13 @@ def to_excel(summary_df, detail_df):
 
 # Streamlit UI
 
-st.title("📊 申込 / 発行 ・AFコード　集計アプリ")
+st.title("📊 申込 / 発行 ・AFコード　集計")
 
 # --- 集計モード選択 ---
 mode = st.radio("集計対象", ["申込データ集計", "発行データ集計"], horizontal=True)
 
 # --- ファイルアップロード ---
-uploaded = st.file_uploader("📤 CVデータ（セキュリティラベルなしの実績データ）", type=["xlsx"])
+uploaded = st.file_uploader("📤 実績データ（セキュリティラベルなしにしてアップロード）", type=["xlsx"])
 if uploaded is None:
     st.stop()
 
