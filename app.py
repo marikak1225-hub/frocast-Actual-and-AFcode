@@ -1,11 +1,7 @@
-# 申込/発行・AF順・目標一致・Excel出力
-
 import streamlit as st
 import pandas as pd
 import numpy as np
 from io import BytesIO
-
-# 基本設定
 
 st.set_page_config(page_title="集計アプリ（申込・発行対応）", layout="wide")
 
@@ -29,7 +25,6 @@ def normalize_assign(val):
     )
 
 # AFマスター読込（動的ヘッダー検出）
-
 def read_af_master(path):
     df = pd.read_excel(path, header=None, engine="openpyxl")
 
@@ -60,7 +55,6 @@ def read_af_master(path):
     return df
 
 # 日付（YYYYMMDD → Timestamp）
-
 def convert_date(val):
     try:
         s = str(int(val))
@@ -72,8 +66,7 @@ def convert_date(val):
     except:
         return pd.NaT
 
-# CVデータ → 割り振り/領域付与 → 縦持ち
-
+# CVデータ → 割り振り/領域付与
 def attach_assign_area(df_raw, af_master, start, end):
     # AFコード → 割り振り/領域 辞書
     af_map = af_master.set_index("AFコード")[["割り振り", "領域"]].to_dict("index")
@@ -110,7 +103,6 @@ def attach_assign_area(df_raw, af_master, start, end):
     return df
 
 # 目標マスター読込（5行目ヘッダー、B列＝日）
-
 def read_target_master(path):
     # ヘッダーは5行目（header=4）
     df = pd.read_excel(path, header=4, engine="openpyxl")
@@ -128,7 +120,6 @@ def read_target_master(path):
     return df
 
 # 目標値取得（Excel INDEX/MATCH 相当）
-
 def get_target_value(date, assign, target_master):
     if pd.isna(date):
         return 0
@@ -146,7 +137,6 @@ def get_target_value(date, assign, target_master):
     return 0 if pd.isna(val) else val
 
 # サマリ作成（AFマスター順 → 3段ヘッダー）
-
 def create_summary(df_data, af_master):
 
     # AFマスター順の「領域→割り振り」順
@@ -190,7 +180,6 @@ def create_summary(df_data, af_master):
     return out
 
 # Excel 出力（2シート）
-
 def to_excel(summary_df, detail_df):
     output = BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
@@ -211,7 +200,6 @@ def to_excel(summary_df, detail_df):
     return output.getvalue()
 
 # Streamlit UI
-
 st.title("📊 申込 / 発行 ・AFコード　集計")
 
 # --- 集計モード選択 ---
