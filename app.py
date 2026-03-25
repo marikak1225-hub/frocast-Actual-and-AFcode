@@ -3,19 +3,15 @@ import pandas as pd
 import numpy as np
 from io import BytesIO
 
-st.set_page_config(page_title="集計アプリ（申込・発行対応）", layout="wide")
+st.set_page_config(page_title="実績データ集計", layout="wide")
 
-# ------------------------------------------------------
 #  ファイルパス（app.py と同じフォルダ）
-# ------------------------------------------------------
 AF_MASTER_PATH = "AFマスター.xlsx"
-AFF_ONLY_PATH = "AFF_AFコード.xlsx"    # ★Affiliate追加ファイル
+AFF_ONLY_PATH = "AFF_AFコード.xlsx"
 TARGET申込_PATH = "目標申込件数マスター.xlsx"
 TARGET発行_PATH = "目標発行件数マスター.xlsx"
 
-# ------------------------------------------------------
 # normalize
-# ------------------------------------------------------
 def normalize_assign(val):
     if val is None:
         return ""
@@ -28,9 +24,7 @@ def normalize_assign(val):
         .strip()
     )
 
-# ------------------------------------------------------
 # AFマスター（動的ヘッダー）
-# ------------------------------------------------------
 def read_af_master(path):
     df = pd.read_excel(path, header=None, engine="openpyxl")
 
@@ -59,14 +53,11 @@ def read_af_master(path):
     df["割り振り"] = df["割り振り"].apply(normalize_assign)
     return df[["AFコード", "割り振り", "領域"]]
 
-# ------------------------------------------------------
-# ★ Affiliate 専用 AFコードマスター読込
-# ------------------------------------------------------
+# Aff専用 AFコード読込
 def read_affiliate_master(path):
     df = pd.read_excel(path, engine="openpyxl", header=0)
 
     df.columns = ["AFコード", "領域"]
-
     df["割り振り"] = df["AFコード"]
 
     df["AFコード"] = df["AFコード"].apply(normalize_assign)
@@ -74,9 +65,7 @@ def read_affiliate_master(path):
 
     return df[["AFコード", "割り振り", "領域"]]
 
-# ------------------------------------------------------
 # 日付変換
-# ------------------------------------------------------
 def convert_date(val):
     try:
         s = str(int(val))
@@ -88,9 +77,7 @@ def convert_date(val):
     except:
         return pd.NaT
 
-# ------------------------------------------------------
 # 割り振り・領域付与
-# ------------------------------------------------------
 def attach_assign_area(df_raw, af_master, start, end):
 
     af_map = af_master.set_index("AFコード")[["割り振り", "領域"]].to_dict("index")
@@ -120,9 +107,7 @@ def attach_assign_area(df_raw, af_master, start, end):
     df = df.groupby(["日付", "割り振り", "領域"], as_index=False).sum()
     return df
 
-# ------------------------------------------------------
 # 目標マスター
-# ------------------------------------------------------
 def read_target_master(path):
     df = pd.read_excel(path, header=4, engine="openpyxl")
     df.columns = [normalize_assign(c) for c in df.columns]
@@ -147,9 +132,7 @@ def get_target_value(date, assign, target_master):
     val = row.iloc[0][assign]
     return 0 if pd.isna(val) else val
 
-# ------------------------------------------------------
 # サマリ
-# ------------------------------------------------------
 def create_summary(df_data, af_master):
 
     af_master_sorted = (
@@ -185,9 +168,7 @@ def create_summary(df_data, af_master):
     out.index = out.index.map(lambda x: f"{x.year}/{x.month}/{x.day}")
     return out
 
-# ------------------------------------------------------
 # Excel 出力
-# ------------------------------------------------------
 def to_excel(summary_df, detail_df):
     output = BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
@@ -204,10 +185,8 @@ def to_excel(summary_df, detail_df):
 
     return output.getvalue()
 
-# ------------------------------------------------------
 # Streamlit UI
-# ------------------------------------------------------
-st.title("📊 申込 / 発行 ・AFコード　集計")
+st.title("📊 実績データ集計")
 
 mode = st.radio("集計対象", ["申込データ集計", "発行データ集計"], horizontal=True)
 
@@ -223,26 +202,19 @@ min_date, max_date = df_raw["日付"].min(), df_raw["日付"].max()
 date_range = st.date_input("📅 期間選択", value=[min_date, max_date])
 start, end = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
 
-# ------------------------------------------------------
-# ★ AFマスター + Affiliateマスター を結合（修正版）
-# ------------------------------------------------------
+# AFマスタ + Affマスタ 結合
 af_master_base = read_af_master(AF_MASTER_PATH)
 af_master_aff  = read_affiliate_master(AFF_ONLY_PATH)
 
-# 列順を完全一致
 af_master_base = af_master_base[["AFコード", "割り振り", "領域"]].copy()
 af_master_aff  = af_master_aff[["AFコード", "割り振り", "領域"]].copy()
 
-# Indexが不一致だとエラー → リセット
 af_master_base = af_master_base.reset_index(drop=True)
 af_master_aff  = af_master_aff.reset_index(drop=True)
 
-# 結合
 af_master = pd.concat([af_master_base, af_master_aff], ignore_index=True)
 
-# ------------------------------------------------------
-# 目標マスター
-# ------------------------------------------------------
+# 目標マスタ
 if mode == "申込データ集計":
     target_master = read_target_master(TARGET申込_PATH)
 else:
@@ -257,17 +229,27 @@ df_data["目標"] = df_data.apply(
 
 summary_df = create_summary(df_data, af_master)
 
-st.subheader("✅ サマリ（AFマスター順）")
+st.subheader("✅ サマリ")
 st.dataframe(summary_df, use_container_width=True)
 
 df_data["日付"] = df_data["日付"].map(lambda x: f"{x.year}/{x.month}/{x.day}")
 
 excel_bytes = to_excel(summary_df, df_data)
 
+# ファイル名生成ロジック
+start_str = start.strftime("%Y%m%d")
+end_str   = end.strftime("%Y%m%d")
+
+if mode == "申込データ集計":
+    filename = f"申込_集計結果_{start_str}_{end_str}.xlsx"
+else:
+    filename = f"発行_集計結果_{start_str}_{end_str}.xlsx"
+
+# Excel ダウンロード
 st.download_button(
     label="📤 集計結果をダウンロード（Excel）",
     data=excel_bytes,
-    file_name="集計結果.xlsx",
+    file_name=filename,
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     use_container_width=True
 )
