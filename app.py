@@ -201,25 +201,60 @@ af_master = pd.concat([
 target_apply = read_target(TARGET_APPLY_PATH)
 target_issue = read_target(TARGET_ISSUE_PATH)
 
-df_a = process_raw(df_apply, af_master, start, end, "申込")
-df_i = process_raw(df_issue, af_master, start, end, "発行")
+def to_excel(area_apply, area_issue, blocks_apply, blocks_issue, raw_df):
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
 
-# 領域別
-area_apply = df_a.pivot_table(index="領域", columns="日付", values="実績", aggfunc="sum", fill_value=0)
-area_issue = df_i.pivot_table(index="領域", columns="日付", values="実績", aggfunc="sum", fill_value=0)
+        # 領域別
+        area_apply.to_excel(writer, sheet_name="領域別_申込")
+        area_issue.to_excel(writer, sheet_name="領域別_発行")
 
-for df in [area_apply, area_issue]:
-    df["total"] = df.sum(axis=1)
-    df.loc["total"] = df.sum()
+        # ===== 割り振り別（申込） =====
+        ws_apply = writer.book.add_worksheet("割り振り別_申込")
+        writer.sheets["割り振り別_申込"] = ws_apply
 
-    df.columns = ["total"] + [c.strftime("%Y/%m/%d") for c in df.columns if c != "total"]
+        row = 0
+        for title, df in [
+            ("■実績", blocks_apply[0]),
+            ("■目標", blocks_apply[1]),
+            ("■GAP", blocks_apply[2]),
+            ("■Target vs Actual", blocks_apply[3]),
+        ]:
+            ws_apply.write(row, 0, title)
+            df.to_excel(
+                writer,
+                sheet_name="割り振り別_申込",
+                startrow=row + 1
+            )
+            row += len(df) + 4
 
-# 割り振り別
-blocks_apply = create_assign_blocks(df_a, target_apply)
-blocks_issue = create_assign_blocks(df_i, target_issue)
+        # ===== 割り振り別（発行） =====
+        ws_issue = writer.book.add_worksheet("割り振り別_発行")
+        writer.sheets["割り振り別_発行"] = ws_issue
 
-raw = pd.concat([df_a, df_i], ignore_index=True)
-raw["日付"] = raw["日付"].dt.strftime("%Y/%m/%d")
+        row = 0
+        for title, df in [
+            ("■実績", blocks_issue[0]),
+            ("■目標", blocks_issue[1]),
+            ("■GAP", blocks_issue[2]),
+            ("■Target vs Actual", blocks_issue[3]),
+        ]:
+            ws_issue.write(row, 0, title)
+            df.to_excel(
+                writer,
+                sheet_name="割り振り別_発行",
+                startrow=row + 1
+            )
+            row += len(df) + 4
+
+        # ローデータ
+        raw_df.to_excel(
+            writer,
+            sheet_name="日別_集計ローデータ",
+            index=False
+        )
+
+    return output.getvalue()
 
 excel = to_excel(area_apply, area_issue, blocks_apply, blocks_issue, raw)
 
