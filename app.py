@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from io import BytesIO
 
-st.set_page_config(page_title="実績データ集計（最終形）", layout="wide")
+st.set_page_config(page_title="実績データ集計（完全最終形）", layout="wide")
 
 AF_MASTER_PATH = "AFマスター.xlsx"
 AFF_ONLY_PATH = "AFF_AFコード.xlsx"
@@ -126,21 +126,19 @@ def to_excel(area_apply, area_issue, blocks_apply, blocks_issue, raw_df):
     output = BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
 
-        # ===== 領域別 =====
+        # 領域別
         ws_area = writer.book.add_worksheet("領域別")
         writer.sheets["領域別"] = ws_area
         row = 0
-
         for title, df in [("申込", area_apply), ("発行", area_issue)]:
             ws_area.write(row, 0, title)
             df.to_excel(writer, sheet_name="領域別", startrow=row + 1)
             row += len(df) + 4
 
-        # ===== 割り振り別 =====
+        # 割り振り別
         ws_assign = writer.book.add_worksheet("割り振り別")
         writer.sheets["割り振り別"] = ws_assign
         row = 0
-
         for label, blocks in [("申込", blocks_apply), ("発行", blocks_issue)]:
             ws_assign.write(row, 0, label)
             row += 1
@@ -152,7 +150,7 @@ def to_excel(area_apply, area_issue, blocks_apply, blocks_issue, raw_df):
                 row += len(df) + 3
             row += 2
 
-        # ===== ローデータ =====
+        # ローデータ
         raw_df.to_excel(writer, sheet_name="日別_集計ローデータ", index=False)
 
     return output.getvalue()
@@ -180,13 +178,18 @@ min_d = min(df_apply["日付"].min(), df_issue["日付"].min())
 max_d = max(df_apply["日付"].max(), df_issue["日付"].max())
 start, end = map(pd.to_datetime, st.date_input("📅 期間選択", value=[min_d, max_d]))
 
-af_master = pd.concat([read_af_master(AF_MASTER_PATH), read_aff_master(AFF_ONLY_PATH)], ignore_index=True)
+af_master = pd.concat(
+    [read_af_master(AF_MASTER_PATH), read_aff_master(AFF_ONLY_PATH)],
+    ignore_index=True
+)
+
 target_apply = read_target(TARGET_APPLY_PATH)
 target_issue = read_target(TARGET_ISSUE_PATH)
 
 df_a = process_raw(df_apply, af_master, start, end, "申込")
 df_i = process_raw(df_issue, af_master, start, end, "発行")
 
+# ===== 領域別（UI表示用 & Excel用）=====
 area_apply = df_a.pivot_table(index="領域", columns="日付", values="実績", aggfunc="sum", fill_value=0)
 area_issue = df_i.pivot_table(index="領域", columns="日付", values="実績", aggfunc="sum", fill_value=0)
 
@@ -195,6 +198,14 @@ for df in [area_apply, area_issue]:
     df.loc["total"] = df.sum()
     df.columns = ["total"] + [c.strftime("%Y/%m/%d") for c in df.columns if c != "total"]
 
+# ===== UI表示 =====
+st.subheader("✅ 領域別サマリ（申込）")
+st.dataframe(area_apply, use_container_width=True)
+
+st.subheader("✅ 領域別サマリ（発行）")
+st.dataframe(area_issue, use_container_width=True)
+
+# ===== 割り振り別（Excel用）=====
 blocks_apply = create_blocks(df_a, target_apply)
 blocks_issue = create_blocks(df_i, target_issue)
 
@@ -209,3 +220,4 @@ st.download_button(
     f"実績集計結果_{start:%Y%m%d}_{end:%Y%m%d}.xlsx",
     use_container_width=True,
 )
+``
