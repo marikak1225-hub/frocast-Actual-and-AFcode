@@ -15,14 +15,7 @@ TARGET_ISSUE_PATH = "目標発行件数マスター.xlsx"
 def normalize(val):
     if pd.isna(val):
         return ""
-    return (
-        str(val)
-        .replace(" ", "")
-        .replace("　", "")
-        .replace("\n", "")
-        .replace("\r", "")
-        .strip()
-    )
+    return str(val).replace(" ", "").replace("　", "").strip()
 
 def convert_date(val):
     try:
@@ -35,114 +28,75 @@ def convert_date(val):
 # マスター
 # =========================
 def read_af_master(path):
-    df = pd.read_excel(path, header=None, engine="openpyxl")
-    header = None
-    for i in range(len(df)):
-        row = df.iloc[i].astype(str).apply(normalize)
-        if row.str.contains("AFコード|AFｺｰﾄﾞ|ＡＦコード").any():
-            header = i
-            break
-    if header is None:
-        st.error("AFコード列が見つかりません")
-        st.stop()
-
+    df = pd.read_excel(path, header=None)
+    header = df.apply(lambda r: r.astype(str).str.contains("AFコード")).any(axis=1).idxmax()
     df.columns = df.iloc[header]
-    df = df.iloc[header + 1:].reset_index(drop=True)
-    df.columns = [normalize(c) for c in df.columns]
-    df["AFコード"] = df["AFコード"].apply(normalize)
-    df["割り振り"] = df["割り振り"].apply(normalize)
+    df = df.iloc[header+1:].reset_index(drop=True)
+    df.columns = df.columns.map(normalize)
+    df["AFコード"] = df["AFコード"].map(normalize)
+    df["割り振り"] = df["割り振り"].map(normalize)
     return df[["AFコード", "割り振り", "領域"]]
 
 def read_aff_master(path):
-    df = pd.read_excel(path, engine="openpyxl")
+    df = pd.read_excel(path)
     df.columns = ["AFコード", "領域"]
     df["割り振り"] = df["AFコード"]
-    df = df.applymap(normalize)
-    return df[["AFコード", "割り振り", "領域"]]
+    return df.applymap(normalize)
 
 def read_target(path):
-    df = pd.read_excel(path, header=4, engine="openpyxl")
-    df.columns = [normalize(c) for c in df.columns]
-    date_col = df.columns[1]
-    df = df.rename(columns={date_col: "日付"})
-    df["日付"] = pd.to_datetime(df["日付"], errors="coerce")
+    df = pd.read_excel(path, header=4)
+    df.columns = df.columns.map(normalize)
+    df.rename(columns={df.columns[1]: "日付"}, inplace=True)
+    df["日付"] = pd.to_datetime(df["日付"])
     return df
 
-def get_target(df_target, date, assign):
-    row = df_target[df_target["日付"] == date]
-    if row.empty or assign not in df_target.columns:
-        return 0
-    val = row.iloc[0][assign]
-    return 0 if pd.isna(val) else val
+def get_target(df, date, assign):
+    row = df[df["日付"] == date]
+    return 0 if row.empty or assign not in df.columns else row.iloc[0][assign]
 
 # =========================
-# 実績ローデータ（統合済）
+# ローデータ（統合済）
 # =========================
 def process_raw(df_raw, af_master, start, end, kind):
     af_map = af_master.set_index("AFコード")[["割り振り", "領域"]].to_dict("index")
-    records = []
+    rows = []
 
     for _, r in df_raw.iterrows():
-        dt = r["日付"]
-        if pd.isna(dt) or not (start <= dt <= end):
+        if not (start <= r["日付"] <= end):
             continue
-
         for col in df_raw.columns[1:]:
-            val = r[col]
-            if pd.isna(val) or val == 0:
+            if pd.isna(r[col]) or r[col] == 0:
                 continue
-
             info = af_map.get(normalize(col))
-            if info is None:
-                continue
+            if info:
+                rows.append([kind, r["日付"], info["割り振り"], info["領域"], r[col]])
 
-            records.append([kind, dt, info["割り振り"], info["領域"], val])
-
-    df = pd.DataFrame(
-        records,
-        columns=["種別", "日付", "割り振り", "領域", "実績"],
-    )
-
-    if df.empty:
-        return df
-
-    df = (
-        df
-        .groupby(["種別", "日付", "割り振り", "領域"], as_index=False)
-        .agg({"実績": "sum"})
-    )
-
-    return df
+    df = pd.DataFrame(rows, columns=["種別", "日付", "割り振り", "領域", "実績"])
+    return df.groupby(["種別", "日付", "割り振り", "領域"], as_index=False).sum()
 
 # =========================
 # 割り振り別
 # =========================
-def create_blocks(df, target_master):
-    act = df.pivot_table(
-        index="日付", columns="割り振り", values="実績",
-        aggfunc="sum", fill_value=0
-    )
-
+def create_blocks(df, target):
+    act = df.pivot_table(index="日付", columns="割り振り", values="実績", aggfunc="sum").fillna(0)
     tar = act.copy()
     for d in act.index:
         for c in act.columns:
-            tar.loc[d, c] = get_target(target_master, d, c)
-
-    for t in [act, tar]:
-        t["total"] = t.sum(axis=1)
+            tar.loc[d, c] = get_target(target, d, c)
 
     gap = act - tar
-    ratio = act.divide(tar)
+    ratio = act / tar
 
-    for df_ in [act, tar, gap, ratio]:
-        df_.index = df_.index.strftime("%Y/%m/%d")
+    for t in [act, tar, gap, ratio]:
+        t["total"] = t.sum(axis=1)
+        t.index = t.index.strftime("%Y/%m/%d")
 
     return act, tar, gap, ratio
 
 # =========================
 # Excel出力
 # =========================
-def to_excel(area_apply, area_issue, blocks_apply, blocks_issue, raw_df):
+def to_excel(area_a, area_i, blocks_a, blocks_i, raw):
     output = BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
         wb = writer.book
@@ -150,68 +104,46 @@ def to_excel(area_apply, area_issue, blocks_apply, blocks_issue, raw_df):
         base = wb.add_format({"font_name": "Meiryo UI", "border": 1})
         bold = wb.add_format({"font_name": "Meiryo UI", "border": 1, "bold": True})
         red = wb.add_format({"font_name": "Meiryo UI", "border": 1, "font_color": "red"})
-        percent = wb.add_format({"font_name": "Meiryo UI", "border": 1, "num_format": "0.0%"})
-        percent_red = wb.add_format({
-            "font_name": "Meiryo UI", "border": 1,
-            "num_format": "0.0%", "font_color": "red"
-        })
+        pct = wb.add_format({"font_name": "Meiryo UI", "border": 1, "num_format": "0.0%"})
+        pct_red = wb.add_format({"font_name": "Meiryo UI", "border": 1, "num_format": "0.0%", "font_color": "red"})
 
-        # -------- 領域別 --------
+        # ==== 領域別 ====
         ws = wb.add_worksheet("領域別")
         writer.sheets["領域別"] = ws
         row = 0
-
-        for title, df in [("申込", area_apply), ("発行", area_issue)]:
+        for title, df in [("申込", area_a), ("発行", area_i)]:
             ws.write(row, 0, title, bold)
             row += 1
-
             df.insert(0, "total", df.sum(axis=1))
             df.loc["total"] = df.sum()
+            df.to_excel(writer, "領域別", startrow=row)
+            start = row + 1
+            end = start + len(df)
+            ws.conditional_format(start, 1, end, 1, {"type": "no_errors", "format": bold})
+            ws.conditional_format(start, 0, start, len(df.columns), {"type": "no_errors", "format": bold})
+            row = end + 2
 
-            df.to_excel(writer, sheet_name="領域別", startrow=row)
-            start_row = row + 1
-            end_row = start_row + len(df)
-
-            # total列・行を太字
-            for r in range(start_row, end_row + 1):
-                ws.write(r, 1, df.iloc[r-start_row, 0], bold)
-
-            row += len(df) + 4
-
-        # -------- 割り振り別 --------
+        # ==== 割り振り別 ====
         ws = wb.add_worksheet("割り振り別")
         writer.sheets["割り振り別"] = ws
         row = 0
-
-        for label, blocks in [("申込", blocks_apply), ("発行", blocks_issue)]:
+        for label, blocks in [("申込", blocks_a), ("発行", blocks_i)]:
             ws.write(row, 0, label, bold)
             row += 1
-
-            titles = ["■実績", "■目標", "■GAP", "■Target vs Actual"]
-            for title, df in zip(titles, blocks):
-                ws.write(row, 0, title, bold)
-                df.to_excel(writer, sheet_name="割り振り別", startrow=row + 1)
+            for name, df in zip(["実績", "目標", "GAP", "Target vs Actual"], blocks):
+                ws.write(row, 0, name, bold)
+                df.to_excel(writer, "割り振り別", startrow=row+1)
                 start = row + 2
                 end = start + len(df)
+                if name == "GAP":
+                    ws.conditional_format(start, 1, end, len(df.columns), {"type": "<", "value": 0, "format": red})
+                if name == "Target vs Actual":
+                    ws.set_column(1, len(df.columns), None, pct)
+                    ws.conditional_format(start, 1, end, len(df.columns), {"type": "<", "value": 0, "format": pct_red})
+                row = end + 2
 
-                if title == "■GAP":
-                    ws.conditional_format(
-                        start, 1, end, len(df.columns),
-                        {"type": "cell", "criteria": "<", "value": 0, "format": red}
-                    )
-
-                if title == "■Target vs Actual":
-                    ws.set_column(1, len(df.columns), None, percent)
-                    ws.conditional_format(
-                        start, 1, end, len(df.columns),
-                        {"type": "cell", "criteria": "<", "value": 0, "format": percent_red}
-                    )
-
-                row += len(df) + 3
-            row += 2
-
-        # -------- ローデータ --------
-        raw_df.to_excel(writer, sheet_name="日別_集計ローデータ", index=False)
+        # ==== ローデータ ====
+        raw.to_excel(writer, "日別_集計ローデータ", index=False)
 
     return output.getvalue()
 
@@ -220,59 +152,35 @@ def to_excel(area_apply, area_issue, blocks_apply, blocks_issue, raw_df):
 # =========================
 st.title("📊 実績データ集計")
 
-apply_file = st.file_uploader("📤 申込データ", type=["xlsx"])
-issue_file = st.file_uploader("📤 発行データ", type=["xlsx"])
-if not apply_file or not issue_file:
+apply = st.file_uploader("申込", type="xlsx")
+issue = st.file_uploader("発行", type="xlsx")
+if not apply or not issue:
     st.stop()
 
-df_apply = pd.read_excel(apply_file, engine="openpyxl")
-df_issue = pd.read_excel(issue_file, engine="openpyxl")
+dfa = pd.read_excel(apply)
+dfi = pd.read_excel(issue)
+dfa.rename(columns={dfa.columns[0]: "日付"}, inplace=True)
+dfi.rename(columns={dfi.columns[0]: "日付"}, inplace=True)
 
-df_apply.rename(columns={df_apply.columns[0]: "日付"}, inplace=True)
-df_issue.rename(columns={df_issue.columns[0]: "日付"}, inplace=True)
+dfa["日付"] = dfa["日付"].map(convert_date)
+dfi["日付"] = dfi["日付"].map(convert_date)
 
-df_apply["日付"] = df_apply["日付"].apply(convert_date)
-df_issue["日付"] = df_issue["日付"].apply(convert_date)
+start, end = map(pd.to_datetime, st.date_input("期間", [dfa["日付"].min(), dfa["日付"].max()]))
 
-min_d = min(df_apply["日付"].min(), df_issue["日付"].min())
-max_d = max(df_apply["日付"].max(), df_issue["日付"].max())
-start, end = map(pd.to_datetime, st.date_input("📅 期間選択", value=[min_d, max_d]))
+af = pd.concat([read_af_master(AF_MASTER_PATH), read_aff_master(AFF_ONLY_PATH)])
+ta = read_target(TARGET_APPLY_PATH)
+ti = read_target(TARGET_ISSUE_PATH)
 
-af_master = pd.concat(
-    [read_af_master(AF_MASTER_PATH), read_aff_master(AFF_ONLY_PATH)],
-    ignore_index=True
-)
+ra = process_raw(dfa, af, start, end, "申込")
+ri = process_raw(dfi, af, start, end, "発行")
 
-target_apply = read_target(TARGET_APPLY_PATH)
-target_issue = read_target(TARGET_ISSUE_PATH)
-
-df_a = process_raw(df_apply, af_master, start, end, "申込")
-df_i = process_raw(df_issue, af_master, start, end, "発行")
-
-# 目標列追加（ローデータ用）
-def add_target(row):
-    target = target_apply if row["種別"] == "申込" else target_issue
-    return get_target(target, row["日付"], row["割り振り"])
-
-raw = pd.concat([df_a, df_i], ignore_index=True)
-raw["目標"] = raw.apply(add_target, axis=1)
+raw = pd.concat([ra, ri])
+raw["目標"] = raw.apply(lambda r: get_target(ta if r["種別"]=="申込" else ti, r["日付"], r["割り振り"]), axis=1)
 raw["日付"] = raw["日付"].dt.strftime("%Y/%m/%d")
 
-# 領域別
-area_apply = df_a.pivot_table(index="領域", columns="日付", values="実績", aggfunc="sum", fill_value=0)
-area_issue = df_i.pivot_table(index="領域", columns="日付", values="実績", aggfunc="sum", fill_value=0)
+area_a = ra.pivot_table(index="領域", columns="日付", values="実績", aggfunc="sum").fillna(0)
+area_i = ri.pivot_table(index="領域", columns="日付", values="実績", aggfunc="sum").fillna(0)
 
-excel = to_excel(
-    area_apply,
-    area_issue,
-    create_blocks(df_a, target_apply),
-    create_blocks(df_i, target_issue),
-    raw
-)
+excel = to_excel(area_a, area_i, create_blocks(ra, ta), create_blocks(ri, ti), raw)
 
-st.download_button(
-    "📥 集計結果をダウンロード（Excel）",
-    excel,
-    f"実績集計結果_{start:%Y%m%d}_{end:%Y%m%d}.xlsx",
-    use_container_width=True,
-)
+st.download_button("📥 Excelダウンロード", excel, "実績集計.xlsx")
