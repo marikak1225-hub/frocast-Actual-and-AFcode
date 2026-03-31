@@ -10,7 +10,7 @@ TARGET_APPLY_PATH = "目標申込件数マスター.xlsx"
 TARGET_ISSUE_PATH = "目標発行件数マスター.xlsx"
 
 # =========================
-# 共通関数
+# 共通
 # =========================
 def normalize(val):
     if pd.isna(val):
@@ -32,7 +32,7 @@ def convert_date(val):
         return pd.NaT
 
 # =========================
-# マスター読込
+# マスター
 # =========================
 def read_af_master(path):
     df = pd.read_excel(path, header=None, engine="openpyxl")
@@ -76,7 +76,7 @@ def get_target(df_target, date, assign):
     return 0 if pd.isna(val) else val
 
 # =========================
-# 実績ローデータ整形（★ダブルカウント修正済）
+# 実績ローデータ（統合済）
 # =========================
 def process_raw(df_raw, af_master, start, end, kind):
     af_map = af_master.set_index("AFコード")[["割り振り", "領域"]].to_dict("index")
@@ -96,9 +96,7 @@ def process_raw(df_raw, af_master, start, end, kind):
             if info is None:
                 continue
 
-            records.append(
-                [kind, dt, info["割り振り"], info["領域"], val]
-            )
+            records.append([kind, dt, info["割り振り"], info["領域"], val])
 
     df = pd.DataFrame(
         records,
@@ -108,7 +106,6 @@ def process_raw(df_raw, af_master, start, end, kind):
     if df.empty:
         return df
 
-    # ✅ 日付・割り振り・領域単位で統合（ダブルカウント防止）
     df = (
         df
         .groupby(["種別", "日付", "割り振り", "領域"], as_index=False)
@@ -118,15 +115,12 @@ def process_raw(df_raw, af_master, start, end, kind):
     return df
 
 # =========================
-# 割り振り別ブロック作成
+# 割り振り別
 # =========================
 def create_blocks(df, target_master):
     act = df.pivot_table(
-        index="日付",
-        columns="割り振り",
-        values="実績",
-        aggfunc="sum",
-        fill_value=0
+        index="日付", columns="割り振り", values="実績",
+        aggfunc="sum", fill_value=0
     )
 
     tar = act.copy()
@@ -138,7 +132,7 @@ def create_blocks(df, target_master):
         t["total"] = t.sum(axis=1)
 
     gap = act - tar
-    ratio = act.divide(tar).replace([float("inf"), -float("inf")], pd.NA)
+    ratio = act.divide(tar)
 
     for df_ in [act, tar, gap, ratio]:
         df_.index = df_.index.strftime("%Y/%m/%d")
@@ -151,32 +145,72 @@ def create_blocks(df, target_master):
 def to_excel(area_apply, area_issue, blocks_apply, blocks_issue, raw_df):
     output = BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        wb = writer.book
 
-        # 領域別
-        ws_area = writer.book.add_worksheet("領域別")
-        writer.sheets["領域別"] = ws_area
+        base = wb.add_format({"font_name": "Meiryo UI", "border": 1})
+        bold = wb.add_format({"font_name": "Meiryo UI", "border": 1, "bold": True})
+        red = wb.add_format({"font_name": "Meiryo UI", "border": 1, "font_color": "red"})
+        percent = wb.add_format({"font_name": "Meiryo UI", "border": 1, "num_format": "0.0%"})
+        percent_red = wb.add_format({
+            "font_name": "Meiryo UI", "border": 1,
+            "num_format": "0.0%", "font_color": "red"
+        })
+
+        # -------- 領域別 --------
+        ws = wb.add_worksheet("領域別")
+        writer.sheets["領域別"] = ws
         row = 0
+
         for title, df in [("申込", area_apply), ("発行", area_issue)]:
-            ws_area.write(row, 0, title)
-            df.to_excel(writer, sheet_name="領域別", startrow=row + 1)
+            ws.write(row, 0, title, bold)
+            row += 1
+
+            df.insert(0, "total", df.sum(axis=1))
+            df.loc["total"] = df.sum()
+
+            df.to_excel(writer, sheet_name="領域別", startrow=row)
+            start_row = row + 1
+            end_row = start_row + len(df)
+
+            # total列・行を太字
+            for r in range(start_row, end_row + 1):
+                ws.write(r, 1, df.iloc[r-start_row, 0], bold)
+
             row += len(df) + 4
 
-        # 割り振り別
-        ws_assign = writer.book.add_worksheet("割り振り別")
-        writer.sheets["割り振り別"] = ws_assign
+        # -------- 割り振り別 --------
+        ws = wb.add_worksheet("割り振り別")
+        writer.sheets["割り振り別"] = ws
         row = 0
+
         for label, blocks in [("申込", blocks_apply), ("発行", blocks_issue)]:
-            ws_assign.write(row, 0, label)
+            ws.write(row, 0, label, bold)
             row += 1
-            for title, df in zip(
-                ["■実績", "■目標", "■GAP", "■Target vs Actual"], blocks
-            ):
-                ws_assign.write(row, 0, title)
+
+            titles = ["■実績", "■目標", "■GAP", "■Target vs Actual"]
+            for title, df in zip(titles, blocks):
+                ws.write(row, 0, title, bold)
                 df.to_excel(writer, sheet_name="割り振り別", startrow=row + 1)
+                start = row + 2
+                end = start + len(df)
+
+                if title == "■GAP":
+                    ws.conditional_format(
+                        start, 1, end, len(df.columns),
+                        {"type": "cell", "criteria": "<", "value": 0, "format": red}
+                    )
+
+                if title == "■Target vs Actual":
+                    ws.set_column(1, len(df.columns), None, percent)
+                    ws.conditional_format(
+                        start, 1, end, len(df.columns),
+                        {"type": "cell", "criteria": "<", "value": 0, "format": percent_red}
+                    )
+
                 row += len(df) + 3
             row += 2
 
-        # ローデータ
+        # -------- ローデータ --------
         raw_df.to_excel(writer, sheet_name="日別_集計ローデータ", index=False)
 
     return output.getvalue()
@@ -202,11 +236,7 @@ df_issue["日付"] = df_issue["日付"].apply(convert_date)
 
 min_d = min(df_apply["日付"].min(), df_issue["日付"].min())
 max_d = max(df_apply["日付"].max(), df_issue["日付"].max())
-
-start, end = map(
-    pd.to_datetime,
-    st.date_input("📅 期間選択", value=[min_d, max_d])
-)
+start, end = map(pd.to_datetime, st.date_input("📅 期間選択", value=[min_d, max_d]))
 
 af_master = pd.concat(
     [read_af_master(AF_MASTER_PATH), read_aff_master(AFF_ONLY_PATH)],
@@ -219,39 +249,26 @@ target_issue = read_target(TARGET_ISSUE_PATH)
 df_a = process_raw(df_apply, af_master, start, end, "申込")
 df_i = process_raw(df_issue, af_master, start, end, "発行")
 
-# =========================
-# 領域別
-# =========================
-area_apply = df_a.pivot_table(
-    index="領域", columns="日付", values="実績", aggfunc="sum", fill_value=0
-)
-area_issue = df_i.pivot_table(
-    index="領域", columns="日付", values="実績", aggfunc="sum", fill_value=0
-)
-
-for df in [area_apply, area_issue]:
-    df["total"] = df.sum(axis=1)
-    df.loc["total"] = df.sum()
-    df.columns = ["total"] + [
-        c.strftime("%Y/%m/%d") for c in df.columns if c != "total"
-    ]
-
-st.subheader("✅ 領域別サマリ（申込）")
-st.dataframe(area_apply, use_container_width=True)
-
-st.subheader("✅ 領域別サマリ（発行）")
-st.dataframe(area_issue, use_container_width=True)
-
-# =========================
-# 割り振り別（Excel用）
-# =========================
-blocks_apply = create_blocks(df_a, target_apply)
-blocks_issue = create_blocks(df_i, target_issue)
+# 目標列追加（ローデータ用）
+def add_target(row):
+    target = target_apply if row["種別"] == "申込" else target_issue
+    return get_target(target, row["日付"], row["割り振り"])
 
 raw = pd.concat([df_a, df_i], ignore_index=True)
+raw["目標"] = raw.apply(add_target, axis=1)
 raw["日付"] = raw["日付"].dt.strftime("%Y/%m/%d")
 
-excel = to_excel(area_apply, area_issue, blocks_apply, blocks_issue, raw)
+# 領域別
+area_apply = df_a.pivot_table(index="領域", columns="日付", values="実績", aggfunc="sum", fill_value=0)
+area_issue = df_i.pivot_table(index="領域", columns="日付", values="実績", aggfunc="sum", fill_value=0)
+
+excel = to_excel(
+    area_apply,
+    area_issue,
+    create_blocks(df_a, target_apply),
+    create_blocks(df_i, target_issue),
+    raw
+)
 
 st.download_button(
     "📥 集計結果をダウンロード（Excel）",
