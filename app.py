@@ -9,9 +9,7 @@ AFF_ONLY_PATH = "AFF_AFコード.xlsx"
 TARGET_APPLY_PATH = "目標申込件数マスター.xlsx"
 TARGET_ISSUE_PATH = "目標発行件数マスター.xlsx"
 
-# =========================
 # 共通
-# =========================
 def normalize(val):
     if pd.isna(val):
         return ""
@@ -24,9 +22,7 @@ def convert_date(val):
     except:
         return pd.NaT
 
-# =========================
-# マスター読込
-# =========================
+# マスタ読込
 def read_af_master(path):
     df = pd.read_excel(path, header=None)
     header = df.apply(lambda r: r.astype(str).str.contains("AFコード")).any(axis=1).idxmax()
@@ -54,9 +50,7 @@ def get_target(df, date, assign):
     row = df[df["日付"] == date]
     return 0 if row.empty or assign not in df.columns else row.iloc[0][assign]
 
-# =========================
-# ローデータ（ダブルカウント防止済）
-# =========================
+# ローデータ（ダブルカウント防止）
 def process_raw(df_raw, af_master, start, end, kind):
     af_map = af_master.set_index("AFコード")[["割り振り", "領域"]].to_dict("index")
     rows = []
@@ -80,9 +74,7 @@ def process_raw(df_raw, af_master, start, end, kind):
         as_index=False
     ).sum()
 
-# =========================
-# 割り振り別（元仕様）
-# =========================
+# 割り振り別
 def create_blocks(df, target):
     act = df.pivot_table(
         index="日付",
@@ -106,9 +98,7 @@ def create_blocks(df, target):
 
     return act, tar, gap, ratio
 
-# =========================
-# Excel出力（完成版）
-# =========================
+# Excel出力
 def to_excel(area_a, area_i, blocks_a, blocks_i, raw):
     output = BytesIO()
 
@@ -165,9 +155,7 @@ def to_excel(area_a, area_i, blocks_a, blocks_i, raw):
 
     return output.getvalue()
 
-# =========================
 # UI
-# =========================
 st.title("📊 実績データ集計")
 
 apply = st.file_uploader("📤 申込データ", type="xlsx")
@@ -199,9 +187,7 @@ ti = read_target(TARGET_ISSUE_PATH)
 ra = process_raw(dfa, af, start, end, "申込")
 ri = process_raw(dfi, af, start, end, "発行")
 
-# =========================
 # UI用 サマリ（領域別）
-# =========================
 def make_summary_df(area_df):
     df = area_df.copy()
     df.insert(0, "total", df.sum(axis=1))
@@ -221,9 +207,7 @@ st.markdown("### 発行")
 area_issue = ri.pivot_table(index="領域", columns="日付", values="実績", aggfunc="sum", fill_value=0)
 st.dataframe(make_summary_df(area_issue), use_container_width=True)
 
-# =========================
-# ローデータ（目標列付き）
-# =========================
+# ローデータ
 raw = pd.concat([ra, ri], ignore_index=True)
 raw["目標"] = raw.apply(
     lambda r: get_target(ta if r["種別"] == "申込" else ti, r["日付"], r["割り振り"]),
@@ -231,9 +215,7 @@ raw["目標"] = raw.apply(
 )
 raw["日付"] = raw["日付"].dt.strftime("%Y/%m/%d")
 
-# =========================
 # Excel出力
-# =========================
 excel = to_excel(
     area_apply,
     area_issue,
