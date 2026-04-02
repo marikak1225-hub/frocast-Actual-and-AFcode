@@ -9,7 +9,9 @@ AFF_ONLY_PATH = "AFF_AFコード.xlsx"
 TARGET_APPLY_PATH = "目標申込件数マスター.xlsx"
 TARGET_ISSUE_PATH = "目標発行件数マスター.xlsx"
 
-# 共通
+# ======================
+# 共通関数
+# ======================
 def normalize(val):
     if pd.isna(val):
         return ""
@@ -19,25 +21,43 @@ def convert_date(val):
     try:
         s = str(int(val))
         return pd.Timestamp(f"{s[:4]}/{int(s[4:6])}/{int(s[6:8])}")
-    except:
+    except Exception:
         return pd.NaT
 
+# ======================
 # マスタ読込
+# ======================
 def read_af_master(path):
     df = pd.read_excel(path, header=None)
-    header = df.apply(lambda r: r.astype(str).str.contains("AFコード")).any(axis=1).idxmax()
-    df.columns = df.iloc[header]
-    df = df.iloc[header + 1:].reset_index(drop=True)
+
+    header_row = (
+        df.apply(lambda r: r.astype(str).str.contains("AFコード")).any(axis=1).idxmax()
+    )
+
+    df.columns = df.iloc[header_row]
+    df = df.iloc[header_row + 1:].reset_index(drop=True)
+
     df.columns = df.columns.map(normalize)
-    df["AFコード"] = df["AFコード"].map(normalize)
-    df["割り振り"] = df["割り振り"].map(normalize)
+    df["AFコード"] = df["AFコード"].apply(normalize)
+    df["割り振り"] = df["割り振り"].apply(normalize)
+
     return df[["AFコード", "割り振り", "領域"]]
 
 def read_aff_master(path):
     df = pd.read_excel(path)
+
+    # 念のため DataFrame 化
+    if isinstance(df, pd.Series):
+        df = df.to_frame()
+
     df.columns = ["AFコード", "領域"]
     df["割り振り"] = df["AFコード"]
-    return df.applymap(normalize)
+
+    # applymap を使わず安全に正規化
+    for col in df.columns:
+        df[col] = df[col].apply(normalize)
+
+    return df
 
 def read_target(path):
     df = pd.read_excel(path, header=4)
@@ -48,11 +68,20 @@ def read_target(path):
 
 def get_target(df, date, assign):
     row = df[df["日付"] == date]
-    return 0 if row.empty or assign not in df.columns else row.iloc[0][assign]
+    if row.empty or assign not in df.columns:
+        return 0
+    return row.iloc[0][assign]
 
-# ローデータ（ダブルカウント防止）
+# ======================
+# ローデータ処理
+# ======================
 def process_raw(df_raw, af_master, start, end, kind):
-    af_map = af_master.set_index("AFコード")[["割り振り", "領域"]].to_dict("index")
+    af_map = (
+        af_master
+        .set_index("AFコード")[["割り振り", "領域"]]
+        .to_dict("index")
+    )
+
     rows = []
 
     for _, r in df_raw.iterrows():
@@ -65,16 +94,23 @@ def process_raw(df_raw, af_master, start, end, kind):
 
             info = af_map.get(normalize(col))
             if info:
-                rows.append([kind, r["日付"], info["割り振り"], info["領域"], r[col]])
+                rows.append(
+                    [kind, r["日付"], info["割り振り"], info["領域"], r[col]]
+                )
 
-    df = pd.DataFrame(rows, columns=["種別", "日付", "割り振り", "領域", "実績"])
+    df = pd.DataFrame(
+        rows,
+        columns=["種別", "日付", "割り振り", "領域", "実績"]
+    )
 
-    return df.groupby(
-        ["種別", "日付", "割り振り", "領域"],
-        as_index=False
-    ).sum()
+    return (
+        df.groupby(["種別", "日付", "割り振り", "領域"], as_index=False)
+        .sum()
+    )
 
-# 割り振り別
+# ======================
+# 割り振り別ブロック
+# ======================
 def create_blocks(df, target):
     act = df.pivot_table(
         index="日付",
@@ -89,7 +125,7 @@ def create_blocks(df, target):
         for c in act.columns:
             tar.loc[d, c] = get_target(target, d, c)
 
-    for t in [act, tar]:
+    for t in (act, tar):
         t["total"] = t.sum(axis=1)
         t.index = t.index.strftime("%Y/%m/%d")
 
@@ -98,7 +134,9 @@ def create_blocks(df, target):
 
     return act, tar, gap, ratio
 
-# Excel出力
+# ======================
+# Excel 出力
+# ======================
 def to_excel(area_a, area_i, blocks_a, blocks_i, raw):
     output = BytesIO()
 
@@ -107,7 +145,7 @@ def to_excel(area_a, area_i, blocks_a, blocks_i, raw):
         bold = wb.add_format({"font_name": "Meiryo UI", "bold": True})
         title_fmt = wb.add_format({"font_name": "Meiryo UI", "bold": True, "border": 1})
 
-        # ===== 領域別 =====
+        # ---- 領域別 ----
         ws = wb.add_worksheet("領域別")
         writer.sheets["領域別"] = ws
         row = 0
@@ -125,15 +163,12 @@ def to_excel(area_a, area_i, blocks_a, blocks_i, raw):
             ]
 
             df2.to_excel(writer, sheet_name="領域別", startrow=row)
-
-            # 列total 太字
             ws.set_column(1, 1, None, bold)
-            # 行total 太字
             ws.set_row(row + len(df2), None, bold)
 
             row += len(df2) + 3
 
-        # ===== 割り振り別 =====
+        # ---- 割り振り別 ----
         ws = wb.add_worksheet("割り振り別")
         writer.sheets["割り振り別"] = ws
         row = 0
@@ -150,12 +185,13 @@ def to_excel(area_a, area_i, blocks_a, blocks_i, raw):
                 df.to_excel(writer, sheet_name="割り振り別", startrow=row + 1)
                 row += len(df) + 3
 
-        # ===== ローデータ =====
         raw.to_excel(writer, sheet_name="日別_集計ローデータ", index=False)
 
     return output.getvalue()
 
+# ======================
 # UI
+# ======================
 st.title("📊 実績データ集計")
 
 apply = st.file_uploader("📤 申込データ", type="xlsx")
@@ -187,7 +223,7 @@ ti = read_target(TARGET_ISSUE_PATH)
 ra = process_raw(dfa, af, start, end, "申込")
 ri = process_raw(dfi, af, start, end, "発行")
 
-# UI用 サマリ（領域別）
+# ---- サマリ ----
 def make_summary_df(area_df):
     df = area_df.copy()
     df.insert(0, "total", df.sum(axis=1))
@@ -207,15 +243,18 @@ st.markdown("### 発行")
 area_issue = ri.pivot_table(index="領域", columns="日付", values="実績", aggfunc="sum", fill_value=0)
 st.dataframe(make_summary_df(area_issue), use_container_width=True)
 
-# ローデータ
+# ---- ローデータ ----
 raw = pd.concat([ra, ri], ignore_index=True)
 raw["目標"] = raw.apply(
-    lambda r: get_target(ta if r["種別"] == "申込" else ti, r["日付"], r["割り振り"]),
+    lambda r: get_target(
+        ta if r["種別"] == "申込" else ti,
+        r["日付"],
+        r["割り振り"]
+    ),
     axis=1
 )
 raw["日付"] = raw["日付"].dt.strftime("%Y/%m/%d")
 
-# Excel出力
 excel = to_excel(
     area_apply,
     area_issue,
@@ -228,5 +267,6 @@ st.download_button(
     "📥 集計結果をダウンロード（Excel）",
     excel,
     f"実績集計結果_{start:%Y%m%d}_{end:%Y%m%d}.xlsx",
-    use_container_width=True,
+    use_container_width=True
 )
+``
