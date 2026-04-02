@@ -269,4 +269,3 @@ st.download_button(
     f"実績集計結果_{start:%Y%m%d}_{end:%Y%m%d}.xlsx",
     use_container_width=True
 )
-``
